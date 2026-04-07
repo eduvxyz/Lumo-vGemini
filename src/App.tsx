@@ -11,6 +11,7 @@ import { Profile } from './pages/Profile';
 import { Transactions } from './pages/Transactions';
 import { Goals } from './pages/Goals';
 import { Debts } from './pages/Debts';
+import { JoinGoal } from './pages/JoinGoal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import './lib/i18n'; // Inicializar i18n
 
@@ -30,6 +31,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/join/:goalId" element={<JoinGoal />} />
           
           <Route path="/" element={
             <ProtectedRoute>

@@ -4,13 +4,14 @@ import { useNavigate } from 'react-router';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
+import { useSafeToSpend } from '../hooks/useSafeToSpend';
 import { ArrowUpRight, ArrowDownRight, Calendar, Sparkles } from 'lucide-react';
 
 export function Dashboard() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
-  const [safeToSpend, setSafeToSpend] = useState(0);
+  const { safeToSpend, loading: safeLoading } = useSafeToSpend();
   const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -19,47 +20,9 @@ export function Dashboard() {
   const [simResult, setSimResult] = useState<'idle' | 'green' | 'red'>('idle');
 
   useEffect(() => {
-    async function fetchFinances() {
+    async function fetchRecent() {
       if (!user) return;
-      
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
-      const dateString = startOfMonth.toISOString().split('T')[0];
-      
       try {
-        // 1. Ingresos del mes
-        const { data: incomes } = await supabase
-          .from('transactions')
-          .select('amount')
-          .eq('user_id', user.id)
-          .eq('type', 'income')
-          .gte('date', dateString);
-          
-        const totalIncome = incomes?.reduce((acc, curr) => acc + Number(curr.amount), 0) || 0;
-
-        // 2. Gastos recurrentes
-        const { data: recurring } = await supabase
-          .from('recurring_expenses')
-          .select('id, amount, name, created_at')
-          .eq('user_id', user.id);
-          
-        const totalRecurring = recurring?.reduce((acc, curr) => acc + Number(curr.amount), 0) || 0;
-
-        // 3. Gastos ya realizados este mes
-        const { data: expenses } = await supabase
-          .from('transactions')
-          .select('amount')
-          .eq('user_id', user.id)
-          .eq('type', 'expense')
-          .gte('date', dateString);
-          
-        const totalExpenses = expenses?.reduce((acc, curr) => acc + Number(curr.amount), 0) || 0;
-
-        // Safe to spend = Ingresos - Gastos Recurrentes - Gastos Realizados
-        const calculatedSafeToSpend = totalIncome - totalRecurring - totalExpenses;
-        setSafeToSpend(calculatedSafeToSpend);
-
-        // 4. Actividad reciente (Combinar transacciones y gastos fijos creados)
         const { data: recentTx } = await supabase
           .from('transactions')
           .select('id, amount, type, category, date')
@@ -87,15 +50,13 @@ export function Dashboard() {
         ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 3);
           
         setRecentTransactions(combined);
-
       } catch (error) {
-        console.error("Error fetching finances:", error);
+        console.error("Error fetching recent:", error);
       } finally {
         setLoading(false);
       }
     }
-    
-    fetchFinances();
+    fetchRecent();
   }, [user]);
 
   const handleSimulate = (e: React.FormEvent) => {
@@ -110,29 +71,38 @@ export function Dashboard() {
     }
   };
 
+  const firstName = profile?.full_name?.split(' ')[0] || user?.user_metadata?.full_name?.split(' ')[0] || 'Usuario';
+  const userCurrency = profile?.currency || 'USD';
+
   return (
     <div className="p-6 space-y-6 pb-24">
       <header className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-            {t('welcome')}
+            {t('welcome', { name: firstName })}
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {loading ? t('calculating') : 'Tu resumen financiero'}
+            {safeLoading ? t('calculating') : 'Tu resumen financiero'}
           </p>
         </div>
-        <div className="w-10 h-10 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center text-green-600 dark:text-green-400 font-bold">
-          {user?.email?.charAt(0).toUpperCase() || 'L'}
-        </div>
+        {profile?.avatar_url ? (
+          <img src={profile.avatar_url} alt="Avatar" className="w-10 h-10 rounded-full object-cover border-2 border-green-500" referrerPolicy="no-referrer" />
+        ) : (
+          <div className="w-10 h-10 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center text-green-600 dark:text-green-400 font-bold">
+            {firstName.charAt(0).toUpperCase()}
+          </div>
+        )}
       </header>
 
       <section className="bg-gray-900 dark:bg-gray-800 p-6 rounded-3xl shadow-lg text-white relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/20 rounded-full blur-3xl -mr-10 -mt-10"></div>
         <h2 className="text-sm font-medium text-gray-300 mb-2">{t('safe_to_spend')}</h2>
-        <div className="text-4xl font-bold mb-1">
-          {formatCurrency(safeToSpend)}
+        <div className={`text-4xl font-bold mb-1 ${safeToSpend < 0 ? 'text-red-400' : ''}`}>
+          {formatCurrency(safeToSpend, userCurrency)}
         </div>
-        <p className="text-xs text-gray-400">Disponible hasta fin de mes</p>
+        <p className="text-xs text-gray-400">
+          {safeToSpend < 0 ? '⚠️ Estás en negativo. Revisa tus gastos fijos.' : 'Disponible hasta fin de mes'}
+        </p>
         
         <div className="mt-6 flex gap-3 relative z-10">
           <button 
@@ -187,7 +157,9 @@ export function Dashboard() {
         </div>
         
         <div className="space-y-3">
-          {recentTransactions.length === 0 ? (
+          {loading ? (
+            <div className="text-center text-gray-500 text-sm">Cargando...</div>
+          ) : recentTransactions.length === 0 ? (
             <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 border border-gray-100 dark:border-gray-800 text-center text-gray-500 text-sm">
               No hay movimientos aún.
             </div>
@@ -212,7 +184,7 @@ export function Dashboard() {
                   </div>
                 </div>
                 <div className={`font-bold ${tx.type === 'income' ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>
-                  {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
+                  {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userCurrency)}
                 </div>
               </div>
             ))
